@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { Plus, Pencil, Trash2, ExternalLink, RefreshCw } from 'lucide-react'
+import { Plus, Pencil, Trash2, ExternalLink, RefreshCw, Copy, Check, BarChart2 } from 'lucide-react'
 import { getLinks, createLink, updateLink, getWebTitle } from '../api/link'
 import { moveToRecycleBin } from '../api/recycleBin'
 import { getGroups } from '../api/group'
+import { getLinkStats } from '../api/stats'
 import type { Group, ShortLink, CreateLinkParams, UpdateLinkParams } from '../types/api'
 
 interface LinksPageProps {
@@ -214,10 +215,189 @@ const Pagination: React.FC<PaginationProps> = ({ current, total, size, onChange 
   )
 }
 
+// ─── Copy Button ─────────────────────────────────────────────────────────────
+
+const CopyButton: React.FC<{ text: string }> = ({ text }) => {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // fallback
+      const el = document.createElement('textarea')
+      el.value = text
+      document.body.appendChild(el)
+      el.select()
+      document.execCommand('copy')
+      document.body.removeChild(el)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }
+  }
+  return (
+    <button
+      onClick={handleCopy}
+      className={`p-1 rounded transition-colors flex-shrink-0 ${
+        copied ? 'text-green-500' : 'text-gray-300 hover:text-gray-500'
+      }`}
+      title="复制短链接"
+    >
+      {copied ? <Check size={12} /> : <Copy size={12} />}
+    </button>
+  )
+}
+
+// ─── Link Stats Modal ─────────────────────────────────────────────────────────
+
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
+import type { GroupStats } from '../types/api'
+
+interface LinkStatsModalProps {
+  link: ShortLink
+  onClose: () => void
+}
+
+function getDateRange(days: number): { startDate: string; endDate: string } {
+  const today = new Date()
+  const end = new Date(today)
+  end.setDate(today.getDate() - 1)
+  const start = new Date(end)
+  start.setDate(end.getDate() - days + 1)
+  const fmt = (d: Date) => d.toISOString().slice(0, 10)
+  return { startDate: fmt(start), endDate: fmt(end) }
+}
+
+const LinkStatsModal: React.FC<LinkStatsModalProps> = ({ link, onClose }) => {
+  const [stats, setStats] = useState<GroupStats | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [period, setPeriod] = useState<7 | 30>(7)
+
+  useEffect(() => {
+    const { startDate, endDate } = getDateRange(period)
+    setLoading(true)
+    getLinkStats({ fullShortUrl: link.fullShortUrl, startDate, endDate })
+      .then(setStats)
+      .catch(() => setStats(null))
+      .finally(() => setLoading(false))
+  }, [link.fullShortUrl, period])
+
+  const chartData = (stats?.daily ?? []).map((d) => ({
+    date: d.date.slice(5),
+    PV: d.pv,
+    UV: d.uv,
+    IP: d.uip,
+  }))
+
+  const totalPv = stats?.daily?.reduce((s, d) => s + d.pv, 0) ?? 0
+  const totalUv = stats?.daily?.reduce((s, d) => s + d.uv, 0) ?? 0
+  const totalUip = stats?.daily?.reduce((s, d) => s + d.uip, 0) ?? 0
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-white rounded-2xl shadow-xl border border-gray-100 w-full max-w-2xl mx-4 p-6 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-base font-semibold text-gray-800">访问统计</h2>
+            <p className="text-xs text-gray-400 mt-0.5 truncate max-w-xs">{link.fullShortUrl}</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center rounded-lg border border-gray-200 overflow-hidden text-xs">
+              {([7, 30] as const).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => setPeriod(p)}
+                  className={`px-3 py-1.5 font-medium transition-colors ${
+                    period === p ? 'bg-blue-500 text-white' : 'text-gray-500 hover:bg-gray-50'
+                  }`}
+                >
+                  {p}日
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={onClose}
+              className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+
+        {/* Summary cards */}
+        <div className="grid grid-cols-3 gap-3 mb-5">
+          {[
+            { label: '访问次数 (PV)', value: totalPv, color: 'text-blue-600', bg: 'bg-blue-50' },
+            { label: '访问人数 (UV)', value: totalUv, color: 'text-purple-600', bg: 'bg-purple-50' },
+            { label: '访问 IP 数', value: totalUip, color: 'text-pink-600', bg: 'bg-pink-50' },
+          ].map((item) => (
+            <div key={item.label} className={`${item.bg} rounded-xl p-4 text-center`}>
+              <div className={`text-2xl font-bold ${item.color}`}>{item.value}</div>
+              <div className="text-xs text-gray-500 mt-1">{item.label}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Chart */}
+        <div className={`transition-opacity ${loading ? 'opacity-40' : ''}`}>
+          <p className="text-xs text-gray-500 mb-2">访问趋势</p>
+          <ResponsiveContainer width="100%" height={180}>
+            <LineChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+              <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#9ca3af' }} tickLine={false} axisLine={{ stroke: '#e5e7eb' }} />
+              <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} tickLine={false} axisLine={false} />
+              <Tooltip contentStyle={{ borderRadius: '10px', border: '1px solid #e5e7eb', fontSize: 12 }} />
+              <Line type="monotone" dataKey="PV" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3, fill: '#3b82f6', strokeWidth: 0 }} activeDot={{ r: 5 }} />
+              <Line type="monotone" dataKey="UV" stroke="#a855f7" strokeWidth={2} dot={{ r: 3, fill: '#a855f7', strokeWidth: 0 }} activeDot={{ r: 5 }} />
+              <Line type="monotone" dataKey="IP" stroke="#f472b6" strokeWidth={2} dot={{ r: 3, fill: '#f472b6', strokeWidth: 0 }} activeDot={{ r: 5 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Top devices / browsers */}
+        {stats && (
+          <div className="grid grid-cols-2 gap-4 mt-4">
+            <div>
+              <p className="text-xs font-medium text-gray-500 mb-2">浏览器分布</p>
+              {(stats.browserStats ?? []).slice(0, 5).map((b) => (
+                <div key={b.browser} className="flex items-center gap-2 mb-1.5">
+                  <span className="text-xs text-gray-600 w-16 truncate">{b.browser}</span>
+                  <div className="flex-1 bg-gray-100 rounded-full h-1.5">
+                    <div className="bg-blue-400 h-1.5 rounded-full" style={{ width: `${(b.ratio * 100).toFixed(0)}%` }} />
+                  </div>
+                  <span className="text-xs text-gray-400 w-8 text-right">{(b.ratio * 100).toFixed(0)}%</span>
+                </div>
+              ))}
+              {(stats.browserStats ?? []).length === 0 && <p className="text-xs text-gray-300">暂无数据</p>}
+            </div>
+            <div>
+              <p className="text-xs font-medium text-gray-500 mb-2">设备分布</p>
+              {(stats.deviceStats ?? []).slice(0, 5).map((d) => (
+                <div key={d.device} className="flex items-center gap-2 mb-1.5">
+                  <span className="text-xs text-gray-600 w-16 truncate">{d.device}</span>
+                  <div className="flex-1 bg-gray-100 rounded-full h-1.5">
+                    <div className="bg-purple-400 h-1.5 rounded-full" style={{ width: `${(d.ratio * 100).toFixed(0)}%` }} />
+                  </div>
+                  <span className="text-xs text-gray-400 w-8 text-right">{(d.ratio * 100).toFixed(0)}%</span>
+                </div>
+              ))}
+              {(stats.deviceStats ?? []).length === 0 && <p className="text-xs text-gray-300">暂无数据</p>}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 10
-const DEFAULT_DOMAIN = 'nurl.ink'
+const DEFAULT_DOMAIN = import.meta.env.VITE_SHORT_DOMAIN ?? 'localhost:3001'
 
 const LinksPage: React.FC<LinksPageProps> = ({
   activeGroup,
@@ -235,6 +415,7 @@ const LinksPage: React.FC<LinksPageProps> = ({
   const [form, setForm] = useState<LinkFormState>(defaultForm(''))
   const [submitting, setSubmitting] = useState(false)
   const [fetchingTitle, setFetchingTitle] = useState(false)
+  const [statsLink, setStatsLink] = useState<ShortLink | null>(null)
 
   const fetchLinks = useCallback(async (page: number) => {
     if (!activeGroup) return
@@ -312,7 +493,7 @@ const LinksPage: React.FC<LinksPageProps> = ({
           domain: DEFAULT_DOMAIN,
           originUrl: form.originUrl.trim(),
           gid: form.gid,
-          createdType: 1,
+          createdType: activeTab === 'normal' ? 0 : 1,
           validDateType: form.validDateType,
           validDate,
           describe: form.describe.trim(),
@@ -324,7 +505,7 @@ const LinksPage: React.FC<LinksPageProps> = ({
           domain: editingLink.domain,
           originUrl: form.originUrl.trim(),
           gid: form.gid,
-          createdType: 1,
+          createdType: activeTab === 'normal' ? 0 : 1,
           validDateType: form.validDateType,
           validDate,
           describe: form.describe.trim(),
@@ -359,8 +540,7 @@ const LinksPage: React.FC<LinksPageProps> = ({
       link.originUrl.toLowerCase().includes(kw) ||
       link.fullShortUrl.toLowerCase().includes(kw) ||
       link.describe.toLowerCase().includes(kw)
-    // createdType not in response; tab is display-only for now
-    const matchTab = activeTab === 'normal' ? true : true
+    const matchTab = activeTab === 'normal' ? link.createdType === 0 : link.createdType === 1
     return matchKw && matchTab
   })
 
@@ -415,7 +595,7 @@ const LinksPage: React.FC<LinksPageProps> = ({
                 <tr key={link.id} className="hover:bg-gray-50 transition-colors">
                   {/* Short URL */}
                   <td className="px-5 py-3">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
                       {link.favicon ? (
                         <img
                           src={link.favicon}
@@ -427,7 +607,7 @@ const LinksPage: React.FC<LinksPageProps> = ({
                         <div className="w-4 h-4 rounded bg-gray-100 flex-shrink-0" />
                       )}
                       <a
-                        href={`https://${link.fullShortUrl}`}
+                        href={link.fullShortUrl}
                         target="_blank"
                         rel="noreferrer"
                         className="text-blue-500 hover:underline flex items-center gap-1 text-xs"
@@ -435,6 +615,7 @@ const LinksPage: React.FC<LinksPageProps> = ({
                         {link.fullShortUrl}
                         <ExternalLink size={11} />
                       </a>
+                      <CopyButton text={link.fullShortUrl} />
                     </div>
                   </td>
 
@@ -477,6 +658,13 @@ const LinksPage: React.FC<LinksPageProps> = ({
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-center gap-2">
                       <button
+                        onClick={() => setStatsLink(link)}
+                        className="p-1.5 text-gray-400 hover:text-purple-500 hover:bg-purple-50 rounded-lg transition-colors"
+                        title="访问统计"
+                      >
+                        <BarChart2 size={14} />
+                      </button>
+                      <button
                         onClick={() => openEdit(link)}
                         className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors"
                         title="编辑"
@@ -518,6 +706,10 @@ const LinksPage: React.FC<LinksPageProps> = ({
           onSubmit={handleSubmit}
           onClose={() => setModalMode(null)}
         />
+      )}
+
+      {statsLink && (
+        <LinkStatsModal link={statsLink} onClose={() => setStatsLink(null)} />
       )}
     </div>
   )

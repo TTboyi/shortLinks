@@ -10,3 +10,13 @@ export async function getGroupStats(params: {
     `/api/short-link/admin/v1/stats/group${buildQuery(params)}`
   )
 }
+
+export async function getLinkStats(params: {
+  fullShortUrl: string
+  startDate: string
+  endDate: string
+}): Promise<GroupStats> {
+  return request<GroupStats>(
+    `/api/short-link/admin/v1/stats/single${buildQuery(params)}`
+  )
+}

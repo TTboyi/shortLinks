@@ -29,6 +29,7 @@ export type Group = {
   gid: string
   name: string
   sortOrder?: number
+  linkCount?: number
 }
 
 export type ShortLink = {
@@ -43,6 +44,7 @@ export type ShortLink = {
   createTime: string
   describe: string
   favicon: string
+  createdType: 0 | 1
   totalPv: number
   todayPv: number
   totalUv: number
